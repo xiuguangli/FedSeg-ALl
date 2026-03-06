@@ -1,0 +1,16 @@
+
+# datasets
+/data/voc/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.bin
+*.npy
+*.npz
+*.pt
+*.pdparams
+
+
+# ignore only this subfolder
+data/voc/

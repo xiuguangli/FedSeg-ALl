@@ -1,0 +1,17 @@
+venv/*
+save/*
+logs/*.txt
+data/*
+*.pyc
+__pycache__/
+
+voc/
+
+*.log
+
+checkpoints/*
+
+debug/*
+.vscode/*
+
+tmp_global_model*.ckpt

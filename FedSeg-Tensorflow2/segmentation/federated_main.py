@@ -28,6 +28,7 @@ from myseg.datasplit import get_dataset_ade20k, get_dataset_camvid, get_dataset_
 from myseg.magic import create_tf_dataloader_from_custom_dataset_test
 from runtime_utils import should_disable_tqdm
 from seed_utils import seed_everything
+from tensorflow_runtime import require_tensorflow_device
 from tf2_tools import assign_model_weights, build_fast_tf_bisenetv2_from_model, snapshot_model_weights
 from utils import EMA, average_weights, exp_details, weighted_average_weights
 
@@ -220,25 +221,14 @@ class FederatedTrainer:
         return tf.zeros([3, 64, 64], dtype=tf.float32)
 
     def _configure_gpu(self):
-        gpus = tf.config.experimental.list_physical_devices("GPU")
-        if not gpus:
-            logger.warning(
-                "TensorFlow did not detect a usable GPU. requested_gpu={} CUDA_VISIBLE_DEVICES={} running_on_cpu=True",
-                self.args.gpu,
-                os.environ.get("CUDA_VISIBLE_DEVICES", ""),
-            )
-            return
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            logger.info(
-                "Enabled TensorFlow memory growth for {} GPU(s): requested_gpu={} visible_gpus={}",
-                len(gpus),
-                self.args.gpu,
-                [gpu.name for gpu in gpus],
-            )
-        except RuntimeError as exc:
-            logger.warning("Failed to configure GPU memory growth: {}", exc)
+        self.device = require_tensorflow_device(tf, self.args.gpu)
+        logger.info(
+            "TensorFlow runtime device={} requested_gpu={} CUDA_VISIBLE_DEVICES={} visible_gpus={}",
+            self.device,
+            self.args.gpu,
+            os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+            [gpu.name for gpu in tf.config.list_physical_devices("GPU")],
+        )
 
     def _load_checkpoint(self):
         if self.args.checkpoint == "":

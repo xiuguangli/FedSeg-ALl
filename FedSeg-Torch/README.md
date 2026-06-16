@@ -1,37 +1,61 @@
-# FedSeg
-CVPR 2023 FedSeg: Class-Heterogeneous Federated Learning for Semantic Segmentation
+# FedSeg-Torch
 
-[Pytorch](https://github.com/lightas/FedSeg/) | [MindSpore](https://github.com/xiuguangli/FedSeg-mindspore)| [Paddle](https://github.com/18079070189/FedSeg_Paddle.git) | [Tensorflow](https://github.com/xiuguangli/FedSeg-Tensorflow2)
+这个目录对应原始 PyTorch 实现仓库 [`lightas/FedSeg`](https://github.com/lightas/FedSeg)。
 
+## 复现环境
 
-## Datasets for Federated Learning Segmentation
+推荐直接在当前目录使用 `uv`，环境会创建在本目录的 `.venv/` 下：
 
-Cityscapes: 链接: https://pan.baidu.com/s/15D-Eq0om1DFpsKFeuBB3sg  密码: 9cbm 
-            链接: https://pan.baidu.com/s/1AF9HKEF9fpulBOds3p_ZPQ  密码: bvsa
-
-CamVid:  链接: https://pan.baidu.com/s/1suB1zIQTNt02fqJBwdxMSA  密码: l343
-         链接: https://pan.baidu.com/s/1WksbT44mrylLptN4wKoxqA  密码: l610
-
-
-PascalVOC: 链接: https://pan.baidu.com/s/1c03gu0SIUA62FC4403f9GQ  密码: 3d60
-
-
-ADE20k: 链接: https://pan.baidu.com/s/13ypIWZFCa58oZT7cA3KWNA  密码: tps2
-
-## Training and Evaluation
-
-Put the downloaded datasets into the folder 'data'
-```
-sh run_city.sh
+```bash
+uv sync
 ```
 
-## Citation
+不需要手动激活环境时，可以直接这样运行：
+
+```bash
+uv run python -V
 ```
-@inproceedings{miao2023fedseg,
-  title={FedSeg: Class-Heterogeneous Federated Learning for Semantic Segmentation},
-  author={Miao, Jiaxu and Yang, Zongxin and Fan, Leilei and Yang, Yi},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  pages={8042--8052},
-  year={2023}
-}
+
+默认依赖已经固定在 `pyproject.toml` 和 `uv.lock` 里，适合 clone 后直接复现。
+
+## 数据目录
+
+默认脚本使用当前目录下的 `data/`，例如：
+
+```text
+data/voc
+data/cityscapes_split_erase19
+data/camvid_erase_11C1
+data/ade20k_erase_150C1
 ```
+
+## 常用命令
+
+训练：
+
+```bash
+bash run_voc.sh
+bash run_city.sh
+bash run_camvid.sh
+bash run_ade20k.sh
+```
+
+VOC 评估：
+
+```bash
+uv run python -u segmentation/eval_voc.py \
+  --gpu 0 \
+  --dataset voc \
+  --root_dir data/voc \
+  --num_classes 20 \
+  --data val \
+  --num_workers 2 \
+  --batch_size 1 \
+  --model bisenetv2 \
+  --checkpoints save/checkpoints/FedSeg1.pth
+```
+
+## 说明
+
+- 默认脚本里 `USE_WANDB=0`，因此复现环境没有把 `wandb` 作为基础依赖。
+- `.venv/` 已经加入忽略规则，不会污染仓库提交。

@@ -14,6 +14,7 @@ if SEGMENTATION_DIR not in sys.path:
 
 from checkpoint_utils import load_training_checkpoint
 from fast_eval import checkpoint_label, evaluate_grouped_dataset, format_runtime_detail, format_runtime_profile
+from mindspore_runtime import setup_mindspore_device
 from myseg.bisenet_utils import set_model_bisenetv2
 
 warnings.filterwarnings("ignore")
@@ -65,14 +66,7 @@ def args_parser():
 
 
 def _setup_device(args):
-    if args.gpu != "":
-        try:
-            ms.set_device(device_target="GPU", device_id=int(args.gpu))
-            return "GPU:{}".format(args.gpu)
-        except Exception:
-            pass
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target="CPU")
-    return "CPU"
+    return setup_mindspore_device(args.gpu, mode=ms.PYNATIVE_MODE)
 
 
 def build_model(args):

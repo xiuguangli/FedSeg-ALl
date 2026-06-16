@@ -86,7 +86,7 @@ NUM_CLS="${NUM_CLS:-20}"
 # NUM_USERS: 联邦客户端总数。
 NUM_USERS="${NUM_USERS:-60}"
 # GPU_ID: CUDA_VISIBLE_DEVICES 风格的 GPU 编号，传给 federated_main.py。
-GPU_ID="${GPU_ID:-0}"
+GPU_ID="${GPU_ID-0}"
 
 # ===== checkpoint / eval 模式 =====
 # 默认启动训练；训练中的 global eval 使用快速评估，完整训练结束后再跑正常 eval。
@@ -115,7 +115,10 @@ FAST_NHWC="${FAST_NHWC:-True}"
 # 下方参数基本是把上面的 shell 变量传给 segmentation/federated_main.py。
 # 如需临时改频率，可用环境变量覆盖：
 #   SAVE_FREQUENCY=10 LOCAL_TEST_FREQUENCY=9999 GLOBAL_TEST_FREQUENCY=5 bash run_voc.sh
-python -u segmentation/federated_main.py \
+source "$(cd "$(dirname "$0")" && pwd)/scripts/tensorflow_env.sh"
+fedseg_tensorflow_prepare_for_gpu_id "${GPU_ID}"
+
+"${FEDSEG_PYTHON[@]}" -u segmentation/federated_main.py \
 --gpu="${GPU_ID}" \
 --dataset=$DATASET \
 --root_dir=$ROOT_DIR \

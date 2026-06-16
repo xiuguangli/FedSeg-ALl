@@ -1,0 +1,4 @@
+{
+  "source_torch_backbone": "/home/lxg/work/FedSeg-tf/FedSeg-tf2/segmentation/myseg/backbone_v2.pth",
+  "type": "bisenetv2_backbone"
+}

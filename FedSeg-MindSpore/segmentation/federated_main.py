@@ -18,6 +18,7 @@ from checkpoint_utils import (
 from client import Client, ReusableLocalTrainer
 from fast_eval import evaluate_grouped_dataset, format_runtime_detail, format_runtime_profile
 from logging_utils import logger, setup_logger
+from mindspore_runtime import setup_mindspore_device
 from myseg.bisenet_utils import set_model_bisenetv2
 from myseg.datasplit import get_dataset_ade20k, get_dataset_camvid, get_dataset_cityscapes, get_test_dataset
 from options import args_parser
@@ -221,30 +222,13 @@ class FederatedTrainer:
     def _setup_device(self):
         gpu_value = getattr(self.args, "gpu", "")
         ms_mode = self._resolve_ms_mode()
-        if gpu_value != "" and gpu_value is not None:
-            try:
-                ms.set_device(device_target="GPU", device_id=int(gpu_value))
-                ms.set_context(mode=ms_mode)
-                gpu_config = _build_ms_gpu_config(self.args)
-                if getattr(self.args, "ms_deterministic", False):
-                    ms.set_context(deterministic="ON")
-                if gpu_config:
-                    ms.set_context(gpu_config=gpu_config)
-                if getattr(self.args, "ms_deterministic", False) or gpu_config:
-                    logger.info(
-                        "MindSpore GPU context overrides: deterministic={}, gpu_config={}",
-                        bool(getattr(self.args, "ms_deterministic", False)),
-                        gpu_config,
-                    )
-                return "GPU:{}".format(gpu_value)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to initialize MindSpore GPU context with requested overrides on GPU {}: {}. Falling back to CPU.",
-                    gpu_value,
-                    exc,
-                )
-        ms.set_context(mode=ms_mode, device_target="CPU")
-        return "CPU"
+        return setup_mindspore_device(
+            gpu_value,
+            mode=ms_mode,
+            deterministic=getattr(self.args, "ms_deterministic", False),
+            gpu_config=_build_ms_gpu_config(self.args),
+            logger=logger,
+        )
 
     def _load_checkpoint(self):
         auto_init_checkpoint = self._maybe_auto_align_torch_init()

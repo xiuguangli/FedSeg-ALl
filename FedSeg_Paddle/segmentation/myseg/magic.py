@@ -1,9 +1,7 @@
+import paddle
 
-import torch
 
-# MultiEpochsDataLoader：解决每个循环开始时多次重建self.trainloader的问题
-class MultiEpochsDataLoader(torch.utils.data.DataLoader):
-
+class MultiEpochsDataLoader(paddle.io.DataLoader):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._DataLoader__initialized = False
@@ -20,7 +18,7 @@ class MultiEpochsDataLoader(torch.utils.data.DataLoader):
 
 
 class _RepeatSampler(object):
-    """ Sampler that repeats forever.
+    """Sampler that repeats forever.
     Args:
         sampler (Sampler)
     """

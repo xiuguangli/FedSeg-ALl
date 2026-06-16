@@ -1,3 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "${PROJECT_ROOT}"
+
 # 随时输出log: cityscapes
 date_now=$(date +"%Y%m%d_%H%M%S")
 #python=../envs/torch11/bin/python
@@ -45,9 +51,13 @@ CON_LAMB_LOCAL=1
 DATASET=ade20k #cityscapes #ade20k  #camvid
 NUM_CLS=150
 NUM_USERS=450
+GPU_ID="${GPU_ID-0}"
 
-python -u segmentation/federated_main.py \
---gpu="0" \
+source "${PROJECT_ROOT}/scripts/tensorflow_env.sh"
+fedseg_tensorflow_prepare_for_gpu_id "${GPU_ID}"
+
+"${FEDSEG_PYTHON[@]}" -u segmentation/federated_main.py \
+--gpu="${GPU_ID}" \
 --dataset=$DATASET \
 --root_dir=$ROOT_DIR \
 --USE_ERASE_DATA=True \
@@ -93,4 +103,3 @@ python -u segmentation/federated_main.py \
 --USE_WANDB=0 \
 --date_now=${date_now} \
 2>&1 | tee -a "save/logs/log-${date_now}.txt"
-

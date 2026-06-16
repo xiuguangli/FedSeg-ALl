@@ -1,2 +1,0 @@
-os.getcwd():  /root/paddlejob/workspace/env_run/bisenetv2_fedavg_miao
-device: cuda

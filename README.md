@@ -64,86 +64,226 @@ FedSeg-MindSpore/data/camvid_erase_11C1
 
 ## 快速开始
 
-建议始终先进入对应后端目录，再执行脚本。
+建议始终先进入对应后端目录，再执行环境配置和运行命令。四个子项目都已经用 `uv` 固定了依赖版本，环境会创建在各自目录的 `.venv/` 下，不会互相污染。
 
-### 1. PyTorch
+如果机器上还没有 `uv`，可以先安装：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+下面的训练脚本建议使用 `uv run bash ...` 启动，因为脚本内部调用的是 `python`；这样可以确保实际使用的是当前子项目 `.venv/` 里的解释器和依赖。
+
+### 1. PyTorch 版本
+
+对应目录：`FedSeg-Torch`
+
+环境配置：
 
 ```bash
 cd FedSeg-Torch
+uv sync
+uv run python -V
+```
+
+当前环境主要固定为：
+
+- Python `3.11`
+- `torch==2.8.0`
+- `torchvision==0.23.0`
+
+训练示例：
+
+```bash
+uv run bash run_voc.sh
+uv run bash run_city.sh
+uv run bash run_camvid.sh
+uv run bash run_ade20k.sh
+```
+
+VOC 评估示例：
+
+```bash
+uv run python -u segmentation/eval_voc.py \
+  --gpu 0 \
+  --dataset voc \
+  --root_dir data/voc \
+  --num_classes 20 \
+  --data val \
+  --num_workers 2 \
+  --batch_size 1 \
+  --model bisenetv2 \
+  --checkpoints save/checkpoints/FedSeg1.pth
+```
+
+### 2. TensorFlow 2 版本
+
+对应目录：`FedSeg-Tensorflow2`
+
+环境配置：
+
+```bash
+cd FedSeg-Tensorflow2
+uv sync
+uv run python -V
+bash check_tensorflow_runtime.sh
+```
+
+当前环境主要固定为：
+
+- Python `3.12`
+- `tensorflow[and-cuda]==2.20.0`
+- `keras==3.12.0`
+- CPU 版 `torch==2.6.0` / `torchvision==0.21.0`
+
+TensorFlow GPU 依赖通过官方 `and-cuda` extra 固定在 `uv.lock` 里，会安装对应的 `nvidia-*-cu12` wheel。宿主机仍然需要有可用的 NVIDIA driver；clone 后先跑 `bash check_tensorflow_runtime.sh`，确认 TensorFlow 能看到 GPU。这里保留 CPU 版 PyTorch 依赖，是因为 TensorFlow2 实现里有和 PyTorch checkpoint 对齐相关的代码。
+
+训练示例：
+
+```bash
 bash run_voc.sh
 bash run_city.sh
 bash run_camvid.sh
 bash run_ade20k.sh
 ```
 
-VOC 评估示例：
+只评估 VOC：
 
 ```bash
-cd FedSeg-Torch
-bash eval_voc.sh save/checkpoints/your_checkpoint.pth
+bash eval_voc.sh
 ```
 
-## 2. TensorFlow 2
+如果只想临时走 CPU：
 
 ```bash
-cd FedSeg-Tensorflow2
-bash run_voc.sh
-bash run_city.sh
-bash run_camvid.sh
-bash run_ade20k.sh
+GPU_ID="" bash eval_voc.sh
 ```
 
-VOC 评估示例：
+如果确实要直接指定参数运行，先加载 TensorFlow 运行时 helper：
 
 ```bash
-cd FedSeg-Tensorflow2
-bash eval_voc.sh save/checkpoints/FedSeg.weights.h5
+source scripts/tensorflow_env.sh
+fedseg_tensorflow_prepare_for_gpu_id 0
+uv run python -u segmentation/eval_voc.py \
+  --gpu 0 \
+  --dataset voc \
+  --root ./ \
+  --root_dir data/voc \
+  --USE_ERASE_DATA True \
+  --num_classes 20 \
+  --data val \
+  --num_workers 4 \
+  --eval_bs 8 \
+  --eval_tfdata_batch True \
+  --model bisenetv2 \
+  --checkpoints save/checkpoints/fedseg-tf.weights.h5
 ```
 
-TensorFlow2 目录下还带了测试，可以按需执行：
+轻量测试：
 
 ```bash
-cd FedSeg-Tensorflow2
-pytest test -q
+uv run pytest test/test_eval_voc_smoke.py -q
 ```
 
-`run_voc.sh` 支持不少环境变量覆盖，例如：
+`run_voc.sh` 支持用环境变量覆盖参数，例如：
 
 ```bash
-cd FedSeg-Tensorflow2
 GPU_ID=0 ROOT_DIR=data/voc EVAL_ONLY=True bash run_voc.sh
 ```
 
-### 3. MindSpore
+### 3. MindSpore 版本
+
+对应目录：`FedSeg-MindSpore`
+
+环境配置：
 
 ```bash
 cd FedSeg-MindSpore
+uv sync
+uv run python -V
+bash check_mindspore_runtime.sh
+```
+
+当前环境主要固定为：
+
+- Python `3.10`
+- `mindspore==2.6.0`
+- `numpy==1.26.4`
+
+注意：`uv.lock` 固定的是 Python 依赖，MindSpore GPU 还需要宿主机提供 NVIDIA driver、CUDA runtime 和 cuDNN 动态库。这个版本建议使用 CUDA 11.x + cuDNN 8，推荐 CUDA 11.6。脚本会自动探测常见 CUDA 路径；如果你的 CUDA 安装在自定义位置，可以这样指定：
+
+```bash
+FEDSEG_CUDA_HOME=/path/to/cuda-11.6 bash check_mindspore_runtime.sh
+```
+
+训练示例：
+
+```bash
 bash run_voc.sh
 bash run_city.sh
 bash run_camvid.sh
 bash run_ade20k.sh
 ```
 
-评估示例：
+只评估 VOC：
 
 ```bash
-cd FedSeg-MindSpore
-bash eval_voc.sh save/checkpoints/your_checkpoint.ckpt
+bash eval_voc.sh
 ```
 
-MindSpore 目录里的说明建议使用单独环境，例如：
+如果只想临时走 CPU，可以显式关闭 GPU：
 
 ```bash
-micromamba run -n fedseg-mindspore python -V
+GPU_ID="" bash eval_voc.sh
 ```
 
-### 4. Paddle
+也可以直接指定参数运行：
+
+```bash
+uv run python -u segmentation/eval_voc.py \
+  --gpu 0 \
+  --dataset voc \
+  --root_dir data/voc \
+  --num_classes 20 \
+  --data val \
+  --num_workers 8 \
+  --batch_size 24 \
+  --model bisenetv2 \
+  --checkpoints save/checkpoints/fedseg-ms-33.29.ckpt
+```
+
+### 4. Paddle 版本
+
+对应目录：`FedSeg_Paddle`
+
+环境配置：
 
 ```bash
 cd FedSeg_Paddle
-bash run_city.sh
-bash run_camvid.sh
-bash run_ade20k.sh
+uv sync
+uv run python -V
+```
+
+当前环境主要固定为：
+
+- Python `3.10`
+- `paddlepaddle-gpu==3.3.0`
+- Paddle 官方 `cu129` wheel 源
+
+这个目录里同时保留了 `segmentation/` 和 `paddle_segmentation/` 两套历史代码；当前真正的 Paddle 实现建议优先看 `paddle_segmentation/`。
+
+最小前向验证：
+
+```bash
+uv run python -c "import paddle; from types import SimpleNamespace; from paddle_segmentation.myseg.bisenetv2 import BiSeNetV2; model = BiSeNetV2(SimpleNamespace(proj_dim=256, rand_init=True), 20, aux_mode='eval'); x = paddle.randn([1, 3, 512, 512]); y = model(x)[0]; print(tuple(y.shape))"
+```
+
+历史训练脚本仍然保留：
+
+```bash
+uv run bash run_city.sh
+uv run bash run_camvid.sh
+uv run bash run_ade20k.sh
 ```
 
 如果运行 VOC，请先检查 `run_voc.sh` 里的 `ROOT_DIR`。当前脚本里默认还是较早的 `../voc` 风格路径，通常需要按你本地目录改成类似 `data/voc` 的形式。

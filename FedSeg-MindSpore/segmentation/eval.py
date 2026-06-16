@@ -8,6 +8,7 @@ import mindspore as ms
 from batch_utils import build_batches
 from checkpoint_utils import load_training_checkpoint
 from logging_utils import logger, setup_logger
+from mindspore_runtime import setup_mindspore_device
 from myseg.dataloader import Cityscapes_Dataset
 from update import test_inference
 from federated_main import make_model
@@ -43,14 +44,7 @@ def args_parser():
 
 
 def _setup_device(args):
-    if args.gpu != "":
-        try:
-            ms.set_device(device_target="GPU", device_id=int(args.gpu))
-            return "GPU:{}".format(args.gpu)
-        except Exception:
-            pass
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target="CPU")
-    return "CPU"
+    return setup_mindspore_device(args.gpu, mode=ms.PYNATIVE_MODE)
 
 
 def main():
@@ -94,4 +88,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -17,7 +17,8 @@ _TF_NOISE_PATTERNS = (
 
 def configure_tensorflow_env(gpu: str | None = None) -> None:
     if gpu is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        gpu_value = str(gpu).strip()
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1" if gpu_value == "" else gpu_value
 
     # Keep TensorFlow backend logs quiet unless the user explicitly overrides them.
     os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")

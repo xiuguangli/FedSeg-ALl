@@ -29,6 +29,7 @@ import tensorflow as tf
 
 from logging_utils import logger, setup_logger
 from myseg.bisenet_utils import set_model_bisenetv2
+from tensorflow_runtime import require_tensorflow_device
 from tf2_tools import build_fast_tf_bisenetv2_from_model
 
 configure_tensorflow_runtime(tf)
@@ -1207,8 +1208,10 @@ def main():
 
     project_root = resolve_path(Path.cwd(), eval_args.root)
     start_time = time.time()
+    device = require_tensorflow_device(tf, eval_args.gpu)
     logger.info(
-        "VOC eval config: gpu={} root={} root_dir={} eval_bs={}",
+        "VOC eval config: device={} gpu={} root={} root_dir={} eval_bs={}",
+        device,
         eval_args.gpu,
         project_root,
         eval_args.root_dir,

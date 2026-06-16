@@ -19,6 +19,7 @@ import tensorflow as tf
 from federated_main import load_datasets, make_model
 from logging_utils import logger, setup_logger
 from myseg.magic import create_tf_dataloader_from_custom_dataset_test
+from tensorflow_runtime import require_tensorflow_device
 from update import test_inference
 
 configure_tensorflow_runtime(tf)
@@ -53,7 +54,7 @@ def main():
     setup_logger(verbose=False, logs_dir="logs/eval", log_name="eval")
 
     start_time = time.time()
-    device = "cuda" if tf.config.list_physical_devices("GPU") else "cpu"
+    device = require_tensorflow_device(tf, eval_args.gpu)
     logger.info("device: {}", device)
 
     test_dataset = build_eval_dataset(eval_args)

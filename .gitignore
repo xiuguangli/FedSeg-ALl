@@ -57,10 +57,6 @@ pip-wheel-metadata/
 /FedSeg*/save/training_curves/
 
 # Model weights and converted checkpoints
-/FedSeg*/segmentation/myseg/backbone_v2.ckpt
-/FedSeg*/segmentation/myseg/backbone_v2.pth
-/FedSeg*/segmentation/myseg/backbone_v2.weights.h5
-/FedSeg*/segmentation/myseg/backbone_v2.meta.json
 *.ckpt
 *.pth
 *.pt
@@ -68,6 +64,11 @@ pip-wheel-metadata/
 *.pdparams
 *.pdopt
 *.onnx
+
+# Keep backbone weights required by the model code.
+!/FedSeg*/segmentation/myseg/backbone_v2.*
+!/FedSeg*/paddle_segmentation/myseg/backbone_v2.*
+!/FedSeg*/segmentation-src/myseg/backbone_v2.*
 
 # Runtime leftovers
 nohup.out

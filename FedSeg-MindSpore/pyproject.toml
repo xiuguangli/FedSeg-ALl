@@ -1,0 +1,19 @@
+[project]
+name = "fedseg-mindspore"
+version = "0.1.0"
+description = "MindSpore implementation of FedSeg"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "numpy==1.26.4",
+    "opencv-python==4.11.0.86",
+    "pillow==12.2.0",
+    "scipy==1.15.3",
+    "tqdm==4.67.3",
+    "loguru==0.7.3",
+    "mindspore==2.6.0",
+]
+
+[tool.uv]
+package = false
+link-mode = "copy"

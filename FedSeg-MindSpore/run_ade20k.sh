@@ -45,9 +45,13 @@ CON_LAMB_LOCAL=1
 DATASET=ade20k
 NUM_CLS=150
 NUM_USERS=450
+GPU_ID="${GPU_ID-0}"
 
-micromamba run -n fedseg-mindspore python -u segmentation/federated_main.py \
---gpu="0" \
+source "${PROJECT_ROOT}/scripts/mindspore_env.sh"
+fedseg_mindspore_prepare_for_gpu_id "${GPU_ID}"
+
+"${FEDSEG_PYTHON[@]}" -u segmentation/federated_main.py \
+--gpu="${GPU_ID}" \
 --dataset=$DATASET \
 --root_dir=$ROOT_DIR \
 --USE_ERASE_DATA=True \
@@ -93,4 +97,3 @@ micromamba run -n fedseg-mindspore python -u segmentation/federated_main.py \
 --USE_WANDB=0 \
 --date_now=${date_now} \
 | tee -a "save/logs/log-${date_now}.txt"
-

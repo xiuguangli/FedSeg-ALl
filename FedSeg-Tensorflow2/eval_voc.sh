@@ -7,7 +7,7 @@ cd "${SCRIPT_DIR}"
 ROOT_DIR="${ROOT_DIR:-data/voc}"
 DATASET="${DATASET:-voc}"
 NUM_CLS="${NUM_CLS:-20}"
-GPU_ID="${GPU_ID:-0}"
+GPU_ID="${GPU_ID-0}"
 # CHECKPOINT="${CHECKPOINT:-FedSeg.weights.h5}"
 CHECKPOINT="${CHECKPOINT:-fedseg-tf.weights.h5}"
 EVAL_BS="${EVAL_BS:-8}"
@@ -20,7 +20,10 @@ EVAL_TFDATA_BATCH="${EVAL_TFDATA_BATCH:-True}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 PROFILE_RUNTIME="${PROFILE_RUNTIME:-False}"
 
-python -u segmentation/eval_voc.py \
+source "${SCRIPT_DIR}/scripts/tensorflow_env.sh"
+fedseg_tensorflow_prepare_for_gpu_id "${GPU_ID}"
+
+"${FEDSEG_PYTHON[@]}" -u segmentation/eval_voc.py \
   --gpu "${GPU_ID}" \
   --dataset "${DATASET}" \
   --root "./" \
@@ -42,6 +45,7 @@ python -u segmentation/eval_voc.py \
 
 # Example commands:
 # bash eval_voc.sh
+# GPU_ID="" bash eval_voc.sh  # CPU only
 # EVAL_BS=4 bash eval_voc.sh
 # EVAL_BS=8 bash eval_voc.sh
 # FAST_NHWC=True bash eval_voc.sh

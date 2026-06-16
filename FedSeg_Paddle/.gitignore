@@ -1,4 +1,13 @@
 
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.env.*
+
 # datasets
 /data/voc/
 *.zip
@@ -10,7 +19,19 @@
 *.npz
 *.pt
 *.pdparams
+!segmentation/myseg/backbone_v2.*
+!paddle_segmentation/myseg/backbone_v2.*
+!segmentation-src/myseg/backbone_v2.*
 
 
 # ignore only this subfolder
 data/voc/
+
+logs/
+save/checkpoints/
+save/logs/
+save/training_curves/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

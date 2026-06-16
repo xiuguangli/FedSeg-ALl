@@ -70,5 +70,10 @@ pip-wheel-metadata/
 !/FedSeg*/paddle_segmentation/myseg/backbone_v2.*
 !/FedSeg*/segmentation-src/myseg/backbone_v2.*
 
+# keep ckpt
+!/FedSeg-Torch/save/checkpoints/FedSeg1.pth
+!/FedSeg-Tensorflow2/save/checkpoints/fedseg-tf.weights.h5
+!/FedSeg-MindSpore/save/checkpoints/fedseg-ms-33.29.ckpt
+
 # Runtime leftovers
 nohup.out

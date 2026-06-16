@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 
 from myseg.bisenet_utils import set_model_bisenetv2
 from myseg.dataloader_camvid import CamVid_Dataset
+from torch_runtime import require_torch_device
 from update import test_inference
 
 
@@ -304,9 +305,7 @@ def evaluate_checkpoint(args, checkpoint_path, test_loader, device):
 def main():
     args = args_parser()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cuda":
-        torch.cuda.set_device(int(args.gpu))
+    device = require_torch_device(args.gpu)
     print("device: {}".format(device))
 
     checkpoint_paths = resolve_checkpoint_paths(args)
@@ -321,7 +320,7 @@ def main():
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shuffle=False,
-        pin_memory=(device == "cuda"),
+        pin_memory=(device.type == "cuda"),
         collate_fn=pad_collate_fn,
     )
 

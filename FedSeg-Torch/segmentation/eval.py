@@ -8,6 +8,7 @@ from myseg.dataloader import Cityscapes_Dataset
 from myseg.datasplit import get_dataset_cityscapes
 from logging_utils import logger, setup_logger
 from update import test_inference
+from torch_runtime import require_torch_device
 from utils import exp_details
 
 from federated_main import make_model
@@ -62,11 +63,8 @@ if __name__ == '__main__':
     start_time = time.time()
     #exp_details(args)
 
-    # os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu # 会卡顿
-    torch.cuda.set_device(int(args.gpu))
-
     #torch.manual_seed(args.seed)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = require_torch_device(args.gpu)
     logger.info('device: {}', device)
 
     # load dataset and user groups

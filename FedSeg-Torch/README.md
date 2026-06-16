@@ -14,9 +14,15 @@ uv sync
 
 ```bash
 uv run python -V
+bash check_torch_runtime.sh
 ```
 
-默认依赖已经固定在 `pyproject.toml` 和 `uv.lock` 里，适合 clone 后直接复现。
+默认依赖已经固定在 `pyproject.toml` 和 `uv.lock` 里，适合 clone 后直接复现。Linux 下会从 PyTorch 官方 `cu128` 源安装 CUDA 版 wheel：
+
+- `torch==2.8.0+cu128`
+- `torchvision==0.23.0+cu128`
+
+宿主机仍然需要有可用的 NVIDIA driver。clone 后建议先运行 `bash check_torch_runtime.sh`，确认 PyTorch 能看到 GPU。
 
 ## 数据目录
 
@@ -43,6 +49,20 @@ bash run_ade20k.sh
 VOC 评估：
 
 ```bash
+bash eval_voc.sh
+```
+
+如果只是想临时走 CPU：
+
+```bash
+GPU_ID="" bash eval_voc.sh
+```
+
+如果确实要绕过 `eval_voc.sh` 直接指定参数，先加载运行时 helper：
+
+```bash
+source scripts/torch_env.sh
+fedseg_torch_prepare_for_gpu_id 0
 uv run python -u segmentation/eval_voc.py \
   --gpu 0 \
   --dataset voc \
@@ -57,5 +77,6 @@ uv run python -u segmentation/eval_voc.py \
 
 ## 说明
 
+- 默认按 GPU 复现；如果请求 GPU 但 PyTorch 看不到 GPU，会直接报错而不是静默退回 CPU。
 - 默认脚本里 `USE_WANDB=0`，因此复现环境没有把 `wandb` 作为基础依赖。
 - `.venv/` 已经加入忽略规则，不会污染仓库提交。

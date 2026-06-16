@@ -15,6 +15,7 @@ from myseg.bisenet_utils import set_model_bisenetv2
 from myseg.datasplit import get_dataset_ade20k, get_dataset_camvid, get_dataset_cityscapes
 from options import args_parser
 from seed_utils import seed_everything
+from torch_runtime import require_torch_device
 from utils import EMA, average_weights, exp_details, weighted_average_weights
 
 warnings.filterwarnings("ignore")
@@ -96,9 +97,7 @@ class FederatedTrainer:
     # 联邦训练总控：负责客户端组织、全局聚合、评测以及断点恢复。
     def __init__(self, args):
         self.args = args
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if torch.cuda.is_available():
-            torch.cuda.set_device(int(args.gpu))
+        self.device = require_torch_device(args.gpu)
 
         self.train_dataset, self.test_dataset, self.user_groups = load_datasets(args)
         # 客户端先统一创建好，便于集中打印划分信息；真正的 DataLoader 会在本地训练/评估时再延迟构造。

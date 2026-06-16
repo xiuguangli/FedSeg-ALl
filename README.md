@@ -84,26 +84,43 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 cd FedSeg-Torch
 uv sync
 uv run python -V
+bash check_torch_runtime.sh
 ```
 
 当前环境主要固定为：
 
 - Python `3.11`
-- `torch==2.8.0`
-- `torchvision==0.23.0`
+- `torch==2.8.0+cu128`
+- `torchvision==0.23.0+cu128`
+
+Linux 下会从 PyTorch 官方 `cu128` 源安装 CUDA 版 wheel。宿主机仍然需要有可用的 NVIDIA driver；clone 后先跑 `bash check_torch_runtime.sh`，确认 PyTorch 能看到 GPU。
 
 训练示例：
 
 ```bash
-uv run bash run_voc.sh
-uv run bash run_city.sh
-uv run bash run_camvid.sh
-uv run bash run_ade20k.sh
+bash run_voc.sh
+bash run_city.sh
+bash run_camvid.sh
+bash run_ade20k.sh
 ```
 
 VOC 评估示例：
 
 ```bash
+bash eval_voc.sh
+```
+
+如果只想临时走 CPU：
+
+```bash
+GPU_ID="" bash eval_voc.sh
+```
+
+如果确实要直接指定参数运行，先加载 PyTorch 运行时 helper：
+
+```bash
+source scripts/torch_env.sh
+fedseg_torch_prepare_for_gpu_id 0
 uv run python -u segmentation/eval_voc.py \
   --gpu 0 \
   --dataset voc \

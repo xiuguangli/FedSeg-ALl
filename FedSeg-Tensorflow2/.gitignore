@@ -16,6 +16,8 @@ save/training_curves/
 *.meta.json
 *.pth
 *.pt
+!save/checkpoints/
+!save/checkpoints/fedseg-tf.weights.h5
 !segmentation/myseg/backbone_v2.*
 *.npy
 *.npz

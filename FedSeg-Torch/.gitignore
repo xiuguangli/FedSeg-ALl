@@ -15,6 +15,8 @@ save/training_curves/
 *.pth
 *.pt
 *.onnx
+!save/checkpoints/
+!save/checkpoints/FedSeg1.pth
 !segmentation/myseg/backbone_v2.*
 *.npy
 *.npz

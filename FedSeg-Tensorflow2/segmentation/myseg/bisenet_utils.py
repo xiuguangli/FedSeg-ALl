@@ -1,3 +1,4 @@
+from pathlib import Path
 # import torch
 # from torch import nn
 import numpy as np
@@ -5,10 +6,45 @@ import numpy as np
 
 from myseg.bisenetv2 import BiSeNetV2
 import tensorflow as tf
+from logging_utils import logger
+from tf2_tools import load_tf_backbone_into_tf
+
+
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _default_tf_backbone_path() -> Path:
+    return Path(__file__).resolve().with_name("backbone_v2.weights.h5")
+
+
+def _resolve_tf_backbone_path(args) -> Path:
+    configured = getattr(args, "backbone_checkpoint", "") or ""
+    if configured:
+        checkpoint = Path(configured)
+        if checkpoint.is_absolute():
+            return checkpoint
+        root = Path(getattr(args, "root", "") or ".")
+        rooted = root / checkpoint
+        if rooted.exists():
+            return rooted.resolve()
+        return checkpoint.resolve()
+    return _default_tf_backbone_path()
 
 
 def set_model_bisenetv2(args, num_classes):
     net = BiSeNetV2(proj_dim=args.proj_dim, n_classes=num_classes) # num_classes = 19
+    if not _as_bool(getattr(args, "rand_init", True)):
+        backbone_checkpoint = _resolve_tf_backbone_path(args)
+        if not backbone_checkpoint.exists():
+            raise FileNotFoundError(
+                f"TensorFlow backbone checkpoint not found: {backbone_checkpoint}. "
+                "Run segmentation/convert_torch_backbone_to_tf.py first."
+            )
+        load_tf_backbone_into_tf(net, backbone_checkpoint)
+        logger.info("loaded TensorFlow BiSeNetV2 backbone: {}", backbone_checkpoint)
 
     # if not args.finetune_from is None:
     #     logger.info(f'load pretrained weights from {args.finetune_from}')
@@ -25,40 +61,38 @@ def set_model_bisenetv2(args, num_classes):
 
 
 def set_optimizer(model, args):
-    # if hasattr(model, 'get_params'):
-    #     wd_params, nowd_params, lr_mul_wd_params, lr_mul_nowd_params = model.get_params()
-    #     wd_val = 0
-    #     params_list = [
-    #         {'params': wd_params, },
-    #         {'params': nowd_params, 'weight_decay': wd_val},
-    #         {'params': lr_mul_wd_params, 'lr': args.lr * 10},
-    #         {'params': lr_mul_nowd_params, 'weight_decay': wd_val, 'lr': args.lr * 10},
-    #     ]
-    # else:
-    #     wd_params, non_wd_params = [], []
-    #     for name, param in model.named_parameters():
-    #         if param.dim() == 1:
-    #             non_wd_params.append(param)
-    #         elif param.dim() == 2 or param.dim() == 4:
-    #             wd_params.append(param)
-    #     params_list = [
-    #         {'params': wd_params, },
-    #         {'params': non_wd_params, 'weight_decay': 0},
-    #     ]
-    # optim = torch.optim.SGD(
-    #     params_list,
-    #     lr=args.lr,
-    #     momentum=args.momentum,
-    #     weight_decay=args.weight_decay,
-    # )
-    # return optim
+    if model is not None and hasattr(model, "get_params"):
+        wd_params, nowd_params, lr_mul_wd_params, lr_mul_nowd_params = model.get_params()
+        var_lr_multipliers = {}
+        var_weight_decays = {}
 
-    # TensorFlow2 优化器迁移
+        for var in wd_params:
+            var_lr_multipliers[id(var)] = 1.0
+            var_weight_decays[id(var)] = args.weight_decay
+        for var in nowd_params:
+            var_lr_multipliers[id(var)] = 1.0
+            var_weight_decays[id(var)] = 0.0
+        for var in lr_mul_wd_params:
+            var_lr_multipliers[id(var)] = 10.0
+            var_weight_decays[id(var)] = args.weight_decay
+        for var in lr_mul_nowd_params:
+            var_lr_multipliers[id(var)] = 10.0
+            var_weight_decays[id(var)] = 0.0
+    else:
+        var_lr_multipliers = {}
+        var_weight_decays = {}
+        if model is not None:
+            for var in model.trainable_variables:
+                var_lr_multipliers[id(var)] = 1.0
+                var_weight_decays[id(var)] = args.weight_decay if len(var.shape) in {2, 4} else 0.0
+
     optimizer = tf.keras.optimizers.SGD(
         learning_rate=args.lr,
         momentum=args.momentum,
-        decay=args.weight_decay
+        weight_decay=0.0,
     )
+    optimizer._fedseg_var_lr_multipliers = var_lr_multipliers
+    optimizer._fedseg_var_weight_decays = var_weight_decays
     return optimizer
 
 # class BackCELoss(nn.Module):
@@ -198,18 +232,314 @@ class OhemCELoss(tf.keras.layers.Layer):
         self.thresh = -tf.math.log(tf.constant(thresh, dtype=tf.float32))
         self.ignore_lb = ignore_lb
 
-    def call(self, logits, labels):
-        # logits: [batch, h, w, num_classes], labels: [batch, h, w]
+    def call(self, labels, logits):
+        logits = tf.transpose(logits, perm=[0, 2, 3, 1])
         mask = tf.not_equal(labels, self.ignore_lb)
         new_labels = tf.where(mask, labels, tf.zeros_like(labels))
         loss = tf.keras.losses.sparse_categorical_crossentropy(new_labels, logits, from_logits=True)
         loss = tf.where(mask, loss, tf.zeros_like(loss))
         loss_flat = tf.reshape(loss, [-1])
         hard_loss = tf.boolean_mask(loss_flat, loss_flat > self.thresh)
-        n_min = tf.cast(tf.reduce_sum(tf.cast(mask, tf.int32)) * 0.25, tf.int32)
+        valid_count = tf.reduce_sum(tf.cast(mask, tf.float32))
+        n_min = tf.cast(valid_count * 0.25, tf.int32)
         if tf.size(hard_loss) < n_min:
             hard_loss = tf.sort(loss_flat, direction='DESCENDING')[:n_min]
         return tf.reduce_mean(hard_loss)
+
+
+class SparseCEIgnore(tf.keras.layers.Layer):
+    def __init__(self, ignore_lb=255):
+        super().__init__()
+        self.ignore_lb = ignore_lb
+
+    def call(self, labels, logits):
+        logits = tf.transpose(logits, perm=[0, 2, 3, 1])
+        labels = tf.cast(labels, tf.int32)
+        valid_mask = tf.not_equal(labels, self.ignore_lb)
+        safe_labels = tf.where(valid_mask, labels, tf.zeros_like(labels))
+        loss = tf.keras.losses.sparse_categorical_crossentropy(safe_labels, logits, from_logits=True)
+        loss = tf.where(valid_mask, loss, tf.zeros_like(loss))
+        denom = tf.reduce_sum(tf.cast(valid_mask, tf.float32))
+        return tf.reduce_sum(loss) / (denom + 1e-7)
+
+
+def _soft_tversky_score(output, target, alpha, beta, smooth=0.0, eps=1e-7, axes=None):
+    if axes is None:
+        output_sum = tf.reduce_sum(output)
+        target_sum = tf.reduce_sum(target)
+        difference = tf.reduce_sum(tf.abs(output - target))
+    else:
+        output_sum = tf.reduce_sum(output, axis=axes)
+        target_sum = tf.reduce_sum(target, axis=axes)
+        difference = tf.reduce_sum(tf.abs(output - target), axis=axes)
+
+    intersection = (output_sum + target_sum - difference) / 2.0
+    fp = output_sum - intersection
+    fn = target_sum - intersection
+    return (intersection + smooth) / tf.maximum(intersection + alpha * fp + beta * fn + smooth, eps)
+
+
+def _soft_dice_score(output, target, smooth=0.0, eps=1e-7, axes=None):
+    return _soft_tversky_score(output, target, 0.5, 0.5, smooth=smooth, eps=eps, axes=axes)
+
+
+def _focal_loss_with_logits(
+    output,
+    target,
+    gamma=2.0,
+    alpha=0.25,
+    reduction="mean",
+    normalized=False,
+    reduced_threshold=None,
+    eps=1e-6,
+):
+    target = tf.cast(target, output.dtype)
+    logpt = tf.nn.sigmoid_cross_entropy_with_logits(labels=target, logits=output)
+    pt = tf.exp(-logpt)
+
+    if reduced_threshold is None:
+        focal_term = tf.pow(1.0 - pt, gamma)
+    else:
+        focal_term = tf.pow((1.0 - pt) / reduced_threshold, gamma)
+        focal_term = tf.where(pt < reduced_threshold, tf.ones_like(focal_term), focal_term)
+
+    loss = focal_term * logpt
+    if alpha is not None:
+        loss *= alpha * target + (1.0 - alpha) * (1.0 - target)
+
+    if normalized:
+        loss = loss / tf.maximum(tf.reduce_sum(focal_term), eps)
+
+    if reduction == "sum":
+        return tf.reduce_sum(loss)
+    if reduction == "batchwise_mean":
+        return tf.reduce_sum(loss, axis=0)
+    if reduction == "none":
+        return loss
+    return tf.reduce_mean(loss)
+
+
+class SoftBCEWithLogitsLoss(tf.keras.layers.Layer):
+    def __init__(self, ignore_index=-100, reduction="mean", smooth_factor=None):
+        super().__init__()
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+        self.smooth_factor = smooth_factor
+
+    def call(self, labels, logits):
+        labels = tf.cast(labels, tf.float32)
+        logits = tf.cast(logits, tf.float32)
+        if len(labels.shape) == 4 and labels.shape[-1] is not None and labels.shape[1] != logits.shape[1]:
+            labels = tf.transpose(labels, perm=[0, 3, 1, 2])
+
+        if self.smooth_factor is not None:
+            soft_targets = (1.0 - labels) * self.smooth_factor + labels * (1.0 - self.smooth_factor)
+        else:
+            soft_targets = labels
+
+        loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=soft_targets, logits=logits)
+        if self.ignore_index is not None:
+            not_ignored_mask = tf.cast(tf.not_equal(labels, tf.cast(self.ignore_index, labels.dtype)), loss.dtype)
+            loss = loss * not_ignored_mask
+
+        if self.reduction == "sum":
+            return tf.reduce_sum(loss)
+        if self.reduction == "none":
+            return loss
+        return tf.reduce_mean(loss)
+
+
+class FocalLoss(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        mode,
+        alpha=None,
+        gamma=2.0,
+        ignore_index=None,
+        reduction="mean",
+        normalized=False,
+        reduced_threshold=None,
+    ):
+        super().__init__()
+        self.mode = mode
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+        self.normalized = normalized
+        self.reduced_threshold = reduced_threshold
+
+    def call(self, labels, logits):
+        logits = tf.cast(logits, tf.float32)
+        labels = tf.cast(labels, tf.int32)
+
+        if self.mode != "multiclass":
+            raise ValueError(f"unsupported focal mode: {self.mode}")
+
+        num_classes = logits.shape[1]
+        total_loss = tf.constant(0.0, dtype=logits.dtype)
+        not_ignored = None
+        if self.ignore_index is not None:
+            not_ignored = tf.not_equal(labels, self.ignore_index)
+
+        for cls_idx in range(num_classes):
+            cls_y_true = tf.cast(tf.equal(labels, cls_idx), logits.dtype)
+            cls_y_pred = logits[:, cls_idx, ...]
+
+            if not_ignored is not None:
+                cls_y_true = tf.boolean_mask(cls_y_true, not_ignored)
+                cls_y_pred = tf.boolean_mask(cls_y_pred, not_ignored)
+
+            total_loss += _focal_loss_with_logits(
+                cls_y_pred,
+                cls_y_true,
+                gamma=self.gamma,
+                alpha=self.alpha,
+                reduction=self.reduction,
+                normalized=self.normalized,
+                reduced_threshold=self.reduced_threshold,
+            )
+        return total_loss
+
+
+class DiceLoss(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        mode,
+        classes=None,
+        log_loss=False,
+        from_logits=True,
+        smooth=0.0,
+        ignore_index=None,
+        eps=1e-7,
+    ):
+        super().__init__()
+        self.mode = mode
+        self.classes = classes
+        self.log_loss = log_loss
+        self.from_logits = from_logits
+        self.smooth = smooth
+        self.ignore_index = ignore_index
+        self.eps = eps
+
+    def call(self, labels, logits):
+        logits = tf.cast(logits, tf.float32)
+        labels = tf.cast(labels, tf.int32)
+
+        if self.mode != "multiclass":
+            raise ValueError(f"unsupported dice mode: {self.mode}")
+
+        if self.from_logits:
+            probs = tf.exp(tf.nn.log_softmax(logits, axis=1))
+        else:
+            probs = logits
+
+        batch_size = tf.shape(labels)[0]
+        num_classes = tf.shape(probs)[1]
+        labels = tf.reshape(labels, [batch_size, -1])
+        probs = tf.reshape(probs, [batch_size, num_classes, -1])
+
+        if self.ignore_index is not None:
+            mask = tf.not_equal(labels, self.ignore_index)
+            probs = probs * tf.cast(tf.expand_dims(mask, axis=1), probs.dtype)
+            labels_safe = tf.where(mask, labels, tf.zeros_like(labels))
+            labels_one_hot = tf.one_hot(labels_safe, depth=num_classes, dtype=probs.dtype)
+            labels_one_hot = tf.transpose(labels_one_hot, [0, 2, 1]) * tf.cast(tf.expand_dims(mask, axis=1), probs.dtype)
+        else:
+            labels_one_hot = tf.one_hot(labels, depth=num_classes, dtype=probs.dtype)
+            labels_one_hot = tf.transpose(labels_one_hot, [0, 2, 1])
+
+        scores = _soft_dice_score(probs, labels_one_hot, smooth=self.smooth, eps=self.eps, axes=(0, 2))
+        if self.log_loss:
+            loss = -tf.math.log(tf.maximum(scores, self.eps))
+        else:
+            loss = 1.0 - scores
+
+        non_empty = tf.reduce_sum(labels_one_hot, axis=(0, 2)) > 0
+        loss = loss * tf.cast(non_empty, loss.dtype)
+
+        if self.classes is not None:
+            loss = tf.gather(loss, self.classes)
+        return tf.reduce_mean(loss)
+
+
+def _lovasz_grad(gt_sorted):
+    gt_sorted = tf.cast(gt_sorted, tf.float32)
+    gts = tf.reduce_sum(gt_sorted)
+    intersection = gts - tf.cumsum(gt_sorted)
+    union = gts + tf.cumsum(1.0 - gt_sorted)
+    jaccard = 1.0 - intersection / union
+    return tf.cond(
+        tf.shape(jaccard)[0] > 1,
+        lambda: tf.concat([jaccard[:1], jaccard[1:] - jaccard[:-1]], axis=0),
+        lambda: jaccard,
+    )
+
+
+def _flatten_probas(probas, labels, ignore=None):
+    if len(probas.shape) == 3:
+        probas = tf.expand_dims(probas, axis=1)
+
+    num_classes = tf.shape(probas)[1]
+    probas = tf.transpose(probas, [0, 2, 3, 1])
+    probas = tf.reshape(probas, [-1, num_classes])
+    labels = tf.reshape(labels, [-1])
+
+    if ignore is None:
+        return probas, labels
+
+    valid = tf.not_equal(labels, ignore)
+    return tf.boolean_mask(probas, valid), tf.boolean_mask(labels, valid)
+
+
+def _lovasz_softmax_flat(probas, labels, class_num, classes="present"):
+    if tf.size(probas) == 0:
+        return tf.reduce_sum(probas) * 0.0
+
+    losses = []
+    class_to_sum = range(class_num) if classes in {"all", "present"} else classes
+    for cls_idx in class_to_sum:
+        fg = tf.cast(tf.equal(labels, cls_idx), probas.dtype)
+        if classes == "present" and float(tf.reduce_sum(fg).numpy()) == 0.0:
+            continue
+
+        class_pred = probas[:, cls_idx]
+        errors = tf.abs(fg - class_pred)
+        perm = tf.argsort(errors, direction="DESCENDING")
+        errors_sorted = tf.gather(errors, perm)
+        fg_sorted = tf.gather(fg, perm)
+        losses.append(tf.tensordot(errors_sorted, _lovasz_grad(fg_sorted), axes=1))
+
+    if not losses:
+        return tf.reduce_sum(probas) * 0.0
+    return tf.add_n(losses) / len(losses)
+
+
+class LovaszLoss(tf.keras.layers.Layer):
+    def __init__(self, mode, per_image=False, ignore_index=None, from_logits=True):
+        super().__init__()
+        self.mode = mode
+        self.per_image = per_image
+        self.ignore_index = ignore_index
+        self.from_logits = from_logits
+
+    def call(self, labels, logits):
+        logits = tf.cast(logits, tf.float32)
+        labels = tf.cast(labels, tf.int32)
+
+        if self.mode != "multiclass":
+            raise ValueError(f"unsupported lovasz mode: {self.mode}")
+
+        probas = tf.nn.softmax(logits, axis=1) if self.from_logits else logits
+        if self.per_image:
+            losses = []
+            for prob, label in zip(tf.unstack(probas, axis=0), tf.unstack(labels, axis=0)):
+                prob_flat, label_flat = _flatten_probas(tf.expand_dims(prob, axis=0), tf.expand_dims(label, axis=0), self.ignore_index)
+                losses.append(_lovasz_softmax_flat(prob_flat, label_flat, class_num=logits.shape[1], classes="present"))
+            return tf.add_n(losses) / len(losses)
+
+        prob_flat, label_flat = _flatten_probas(probas, labels, self.ignore_index)
+        return _lovasz_softmax_flat(prob_flat, label_flat, class_num=logits.shape[1], classes="present")
 
 
 #################################################
@@ -752,104 +1082,134 @@ class ContrastLoss(tf.keras.layers.Layer):
         self.temperature = args.temperature
 
     def _anchor_sampling(self, embs, labels):
-        # 将 Tensor 转为 Numpy 进行采样操作
-        embs_np = embs.numpy() if hasattr(embs, "numpy") else embs
-        labels_np = labels.numpy() if hasattr(labels, "numpy") else labels
-        
-        b_, c_, h_, w_ = embs_np.shape
-        class_u = np.unique(labels_np)
-        class_u_num = len(class_u)
-        if 255 in class_u:
-            class_u_num -= 1
-        if class_u_num == 0:
-            return None, None
-            
-        num_p_c = self.max_anchor // class_u_num
-        embs_ = np.transpose(embs_np, (0,2,3,1)).reshape(-1, c_)
-        labels_ = labels_np.reshape(-1)
-        index_ = np.arange(len(labels_))
-        
-        sampled_list = []
-        sampled_label_list = []
-        for cls_ in class_u:
-            if cls_ != 255:
-                mask_ = labels_ == cls_
-                selected_index_ = index_[mask_]
-                if len(selected_index_) > num_p_c:
-                    # 注意：np.random.permutation 与 torch.randperm 结果不同
-                    sel_i_i = np.arange(len(selected_index_))
-                    sel_i_i_i = np.random.permutation(len(sel_i_i))[:num_p_c]
-                    sel_i = sel_i_i[sel_i_i_i]
-                    selected_index_ = selected_index_[sel_i]
-                embs_tmp = embs_[selected_index_]
-                sampled_list.append(embs_tmp)
-                sampled_label_list.append(np.ones(len(selected_index_)) * cls_)
-        
-        if len(sampled_list) == 0:
-            return None, None
+        embs = tf.convert_to_tensor(embs, dtype=tf.float32)
+        labels = tf.convert_to_tensor(labels, dtype=tf.int32)
+        c_ = tf.shape(embs)[1]
+        embs_ = tf.reshape(tf.transpose(embs, [0, 2, 3, 1]), [-1, c_])
+        labels_ = tf.reshape(labels, [-1])
+        class_u, _ = tf.unique(labels_)
+        class_u = tf.boolean_mask(class_u, tf.not_equal(class_u, 255))
+        class_u_num = tf.shape(class_u)[0]
+        num_p_c = tf.maximum(1, self.max_anchor // tf.maximum(1, class_u_num))
+        max_classes = self.args.num_classes
+        sampled_embs = tf.TensorArray(
+            tf.float32,
+            size=max_classes,
+            dynamic_size=False,
+            clear_after_read=False,
+            element_shape=tf.TensorShape([None, None]),
+        )
+        sampled_lbls = tf.TensorArray(
+            tf.float32,
+            size=max_classes,
+            dynamic_size=False,
+            clear_after_read=False,
+            element_shape=tf.TensorShape([None]),
+        )
+        sampled_counts = tf.TensorArray(
+            tf.int32,
+            size=max_classes,
+            dynamic_size=False,
+            clear_after_read=False,
+            element_shape=tf.TensorShape([]),
+        )
 
-        sampled_list = np.concatenate(sampled_list, axis=0)
-        sampled_label_list = np.concatenate(sampled_label_list, axis=0)
-        return sampled_list, sampled_label_list
+        def cond(i, *_args):
+            return i < class_u_num
 
-    def call(self, embs, labels, proto_mem, proto_mask):
-        # 转 Numpy
-        embs_np = embs.numpy() if hasattr(embs, "numpy") else embs
-        labels_np = labels.numpy() if hasattr(labels, "numpy") else labels
-        proto_mem_np = proto_mem.numpy() if hasattr(proto_mem, "numpy") else proto_mem
-        proto_mask_np = proto_mask.numpy() if hasattr(proto_mask, "numpy") else proto_mask
+        def body(i, ta_embs, ta_lbls, ta_counts):
+            cls_ = class_u[i]
+            selected_index_ = tf.reshape(tf.where(tf.equal(labels_, cls_)), [-1])
+            selected_count = tf.shape(selected_index_)[0]
+            selected_index_ = tf.cond(
+                selected_count > num_p_c,
+                lambda: tf.random.shuffle(selected_index_)[:num_p_c],
+                lambda: selected_index_,
+            )
+            current_count = tf.shape(selected_index_)[0]
+            padded_index = tf.pad(selected_index_, [[0, num_p_c - current_count]])
+            sampled_emb = tf.gather(embs_, padded_index)
+            sampled_lbl = tf.fill([num_p_c], tf.cast(cls_, tf.float32))
+            return (
+                i + 1,
+                ta_embs.write(i, sampled_emb),
+                ta_lbls.write(i, sampled_lbl),
+                ta_counts.write(i, current_count),
+            )
 
-        anchors, anchor_labels = self._anchor_sampling(embs_np, labels_np)
-        if anchors is None:
+        def zero_return():
+            return tf.zeros([0, c_], dtype=tf.float32), tf.zeros([0], dtype=tf.float32), class_u_num
+
+        def sampled_return():
+            _, ta_embs, ta_lbls, ta_counts = tf.while_loop(
+                cond,
+                body,
+                loop_vars=(0, sampled_embs, sampled_lbls, sampled_counts),
+                parallel_iterations=1,
+            )
+            embs_stack = ta_embs.gather(tf.range(class_u_num))
+            lbls_stack = ta_lbls.gather(tf.range(class_u_num))
+            counts_stack = ta_counts.gather(tf.range(class_u_num))
+            valid_mask = tf.sequence_mask(counts_stack, maxlen=num_p_c)
+            gathered_embs = tf.boolean_mask(embs_stack, valid_mask)
+            gathered_lbls = tf.boolean_mask(lbls_stack, valid_mask)
+            return gathered_embs, gathered_lbls, class_u_num
+
+        return tf.cond(class_u_num > 0, sampled_return, zero_return)
+
+    def preprocess_prototypes(self, proto_mem, proto_mask):
+        proto_mem = tf.cast(tf.convert_to_tensor(proto_mem), tf.float32)
+        proto_mask = tf.convert_to_tensor(proto_mask)
+
+        if self.args.kmean_num > 0:
+            c_ = tf.shape(proto_mem)[0]
+            km_ = tf.shape(proto_mem)[1]
+            feat_dim = tf.shape(proto_mem)[2]
+            proto_labels = tf.reshape(tf.repeat(tf.range(c_), repeats=km_), [-1])
+            proto_mem_flat = tf.reshape(proto_mem, [-1, feat_dim])
+            proto_mask_flat = tf.reshape(tf.cast(proto_mask, tf.bool), [-1])
+            proto_mem_flat = tf.boolean_mask(proto_mem_flat, proto_mask_flat)
+            proto_labels = tf.boolean_mask(proto_labels, proto_mask_flat)
+        else:
+            c_ = tf.shape(proto_mem)[0]
+            proto_labels = tf.range(c_)
+            proto_mask_flat = tf.reshape(tf.cast(proto_mask, tf.bool), [-1])
+            proto_mem_flat = tf.boolean_mask(proto_mem, proto_mask_flat)
+            proto_labels = tf.boolean_mask(proto_labels, proto_mask_flat)
+
+        return proto_mem_flat, tf.cast(proto_labels, tf.int32)
+
+    def call(self, embs, labels, proto_mem, proto_mask, preprocessed_proto=None):
+        embs = tf.cast(tf.convert_to_tensor(embs), tf.float32)
+        labels = tf.cast(tf.convert_to_tensor(labels), tf.int32)
+
+        anchors, anchor_labels, class_u_num = self._anchor_sampling(embs, labels)
+
+        def zero_loss():
             return tf.constant(0.0, dtype=tf.float32)
 
-        # 原型筛选逻辑
-        if self.args.kmean_num > 0:
-            C_, km_, c_ = proto_mem_np.shape
-            proto_labels = np.arange(C_).reshape(-1,1).repeat(km_, axis=1)
-            proto_mem_ = proto_mem_np.reshape(-1, c_)
-            proto_labels = proto_labels.reshape(-1)
-            proto_mask_ = proto_mask_np.reshape(-1)
-            proto_idx = np.arange(len(proto_mask_))
-            sel_idx = proto_idx[proto_mask_.astype(bool)]
-            proto_mem_ = proto_mem_[sel_idx]
-            proto_labels = proto_labels[sel_idx]
-        else:
-            C_, c_ = proto_mem_np.shape
-            proto_labels = np.arange(C_)
-            proto_mem_ = proto_mem_np
-            # 保持逻辑一致
-            proto_idx = np.arange(len(proto_mask_np))
-            sel_idx = proto_idx[proto_mask_np.astype(bool)]
-            proto_mem_ = proto_mem_[sel_idx]
-            proto_labels = proto_labels[sel_idx]
+        def compute_loss():
+            local_anchor_labels = tf.cast(anchor_labels, tf.int32)
+            if preprocessed_proto is not None:
+                proto_mem_, proto_labels = preprocessed_proto
+            else:
+                proto_mem_, proto_labels = self.preprocess_prototypes(proto_mem, proto_mask)
 
-        # 核心计算
-        anchor_dot_contrast = np.matmul(anchors, proto_mem_.T) / self.temperature
-        mask = (anchor_labels[:, None] == proto_labels[None, :]).astype(np.float32)
-        
-        logits_max = np.max(anchor_dot_contrast, axis=1, keepdims=True)
-        logits = anchor_dot_contrast - logits_max
+            anchor_dot_contrast = tf.matmul(anchors, proto_mem_, transpose_b=True) / self.temperature
+            mask = tf.cast(tf.equal(tf.expand_dims(local_anchor_labels, 1), tf.expand_dims(proto_labels, 0)), tf.float32)
 
-        # [修复点 1]：exp_logits 保持矩阵形状，不求和
-        exp_logits = np.exp(logits) * mask
-        
-        neg_mask = 1 - mask
-        neg_logits = np.exp(logits) * neg_mask
-        neg_logits = neg_logits.sum(axis=1, keepdims=True)
+            logits_max = tf.reduce_max(anchor_dot_contrast, axis=1, keepdims=True)
+            logits = anchor_dot_contrast - tf.stop_gradient(logits_max)
+            neg_mask = 1.0 - mask
 
-        # [修复点 2]：广播计算 Log Prob
-        # exp_logits (N, M) + neg_logits (N, 1) -> (N, M)
-        # 添加 1e-12 防止 log(0)
-        log_prob = logits - np.log(exp_logits + neg_logits + 1e-12)
+            exp_logits = tf.exp(logits) * mask
+            neg_logits = tf.exp(logits) * neg_mask
+            neg_logits = tf.reduce_sum(neg_logits, axis=1, keepdims=True)
+            log_prob = logits - tf.math.log(exp_logits + neg_logits + 1e-12)
+            mean_log_prob_pos = tf.reduce_sum(mask * log_prob, axis=1) / (tf.reduce_sum(mask, axis=1) + 1e-12)
+            return tf.reduce_mean(-mean_log_prob_pos)
 
-        # 计算均值
-        mean_log_prob_pos = (mask * log_prob).sum(axis=1) / (mask.sum(axis=1) + 1e-12)
-
-        loss = -mean_log_prob_pos
-        loss = loss.mean()
-        
-        return tf.convert_to_tensor(loss, dtype=tf.float32)
+        return tf.cond(class_u_num > 0, compute_loss, zero_loss)
 
 
 
@@ -1044,8 +1404,3 @@ class ContrastLossLocal(tf.keras.layers.Layer):
         loss = -mean_log_prob_pos
         loss = tf.reduce_mean(loss)
         return loss
-
-
-
-
-

@@ -1,129 +1,85 @@
+import os
 import time
 import warnings
 
-import numpy as np
-# import torch
-# from torch.utils.data import DataLoader
+from options import args_parser
+from runtime_utils import (
+    configure_tensorflow_env,
+    configure_tensorflow_runtime,
+    install_tensorflow_stderr_filter,
+)
+
+_BOOTSTRAP_ARGS = args_parser(allow_unknown=True) if __name__ == "__main__" else None
+
+configure_tensorflow_env(gpu=_BOOTSTRAP_ARGS.gpu if _BOOTSTRAP_ARGS is not None else None)
+install_tensorflow_stderr_filter()
+
 import tensorflow as tf
 
-from myseg.dataloader import Cityscapes_Dataset
-from myseg.datasplit import get_dataset_cityscapes
+from federated_main import load_datasets, make_model
+from logging_utils import logger, setup_logger
+from myseg.magic import create_tf_dataloader_from_custom_dataset_test
 from update import test_inference
-from utils import exp_details
 
-from federated_main import make_model
+configure_tensorflow_runtime(tf)
 
-import os
-import argparse
-
-def str2bool(v):
-    if isinstance(v, bool):
-       return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-def args_parser():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('--gpu', type=str, default='0',
-                        help='index of GPU to use')
-    parser.add_argument('--num_workers', type=int, default=1,
-                        help='test colab gpu num_workers=1 is faster')
-
-    # model arguments
-    parser.add_argument('--model', type=str, default='bisenetv2',
-                        choices=['lraspp_mobilenetv3', 'bisenetv2'],
-                        help='model name')
-    parser.add_argument('--num_classes', type=int, default=21, help="number of classes max is 81, pretrained is 21")
-    parser.add_argument('--checkpoint', type=str, default='', help='full file name of the checkpoint')
-
-    # datasets and training
-    parser.add_argument('--dataset', type=str, default='cityscapes', help="name of dataset")
-    parser.add_argument('--root_dir', type=str, default='/home/data/cityscapes/', help="root of dataset")
-    parser.add_argument('--root', type=str, default='./', help='home directory')
-    parser.add_argument('--data', type=str, default='train', choices=['train', 'val', 'test'],
-                        help='cityscapes train or val or test')
-
-    parser.add_argument('--USE_ERASE_DATA', type=str2bool,  help="name of dataset")
-    parser.add_argument('--proj_dim', type=int, default=256, help="name of dataset")
-    parser.add_argument('--rand_init', type=str2bool, default=False, help="name of dataset")
-
-    args = parser.parse_args()
-    return args
+warnings.filterwarnings("ignore")
 
 
-if __name__ == '__main__':
-    args = args_parser()
+def _normalize_checkpoint_name(checkpoint_name: str) -> str:
+    if checkpoint_name.endswith(".pth"):
+        return checkpoint_name[: -len(".pth")] + ".weights.h5"
+    return checkpoint_name
+
+
+def build_eval_dataset(eval_args):
+    if eval_args.dataset == "cityscapes":
+        if eval_args.data not in {"train", "val"}:
+            raise ValueError("cityscapes only supports train/val in TF2 eval")
+        _, test_dataset, _ = load_datasets(eval_args)
+        logger.info("args.data: {}", eval_args.data)
+        return test_dataset
+
+    if eval_args.dataset in {"camvid", "ade20k", "voc"}:
+        _, test_dataset, _ = load_datasets(eval_args)
+        logger.info("args.data: {}", eval_args.data)
+        return test_dataset
+
+    raise ValueError("unrecognized dataset")
+
+
+def main():
+    eval_args = args_parser()
+    setup_logger(verbose=False, logs_dir="logs/eval", log_name="eval")
 
     start_time = time.time()
-    #exp_details(args)
+    device = "cuda" if tf.config.list_physical_devices("GPU") else "cpu"
+    logger.info("device: {}", device)
 
-    # os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu # 会卡顿
-    torch.cuda.set_device(int(args.gpu))
+    test_dataset = build_eval_dataset(eval_args)
+    test_loader = create_tf_dataloader_from_custom_dataset_test(
+        test_dataset,
+        batch_size=4,
+        shuffle=False,
+    )
 
-    #torch.manual_seed(args.seed)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print('device: ' + device)
+    global_model = make_model(eval_args)
+    _ = global_model(test_dataset[0][0][None, ...], training=False)
 
-    # load dataset and user groups
-    if args.dataset == 'cityscapes':
-        #train_dataset, test_dataset, user_groups = get_dataset_cityscapes(args)
-        test_dataset = Cityscapes_Dataset(args.root_dir, args.data, args.USE_ERASE_DATA)
-        print('args.data: ', args.data) # args.data = 'val'
-    else:
-        exit('Error: unrecognized dataset')
+    if eval_args.checkpoint == "":
+        raise ValueError("args.checkpoint is empty")
 
-    # TensorFlow 2 DataLoader 替换
-    def tf_data_generator(dataset, batch_size):
-        for i in range(0, len(dataset), batch_size):
-            images, targets = [], []
-            for j in range(i, min(i + batch_size, len(dataset))):
-                img, tgt = dataset[j]
-                images.append(img)
-                targets.append(tgt)
-            yield np.stack(images), np.stack(targets)
-    test_loader = tf_data_generator(test_dataset, batch_size=4)
+    checkpoint_path = os.path.join(eval_args.root, "save/checkpoints", _normalize_checkpoint_name(eval_args.checkpoint))
+    global_model.load_weights(checkpoint_path)
+    logger.info("resume from: {}", os.path.basename(checkpoint_path))
 
-    # BUILD MODEL
-    global_model = make_model(args)
-
-    # print global_model
-    # from torchinfo import summary
-    # print(global_model) # 根据__init__的参数顺序，输出网络结构
-    # summary(global_model, input_size=(1, 3, 512, 1024), device='cpu', depth=5)
-    # exit()
-
-    # Set the model to train and send it to device.
-    # global_model.to(device)  # TensorFlow模型无需to(device)
-
-    # resume from checkpoint
-    # args.checkpoint = "fed_train_bisenetv2_c19_e1500_frac[0.035]_iid[1]_E[2]_B[8]_lr[0.05]_acti[relu]_users[144]_opti[sgd]_sche[lambda].pth"
-    if args.checkpoint != "":
-        checkpoint = torch.load(
-            os.path.join(args.root, 'save/checkpoints', args.checkpoint),
-            map_location=device)
-        global_model.load_state_dict(checkpoint['model'])
-        start_ep = checkpoint['epoch'] + 1
-        print("resume from: ", args.checkpoint)
-    else:
-        exit('Error: args.checkpoint is empty')
+    logger.info("Evaluate global model on global Test dataset")
+    test_acc, test_iou, confmat = test_inference(eval_args, global_model, test_loader)
+    logger.debug("Confusion matrix:\n{}", confmat)
+    logger.info("Global Test Accuracy: {:.2f}%", test_acc)
+    logger.info("Global Test IoU: {:.2f}%", test_iou)
+    logger.info("Total Run Time: {:.2f}s", time.time() - start_time)
 
 
-    # ----------------------------下面的全是evaluate部分----------------------------
-    global_model.eval()
-
-    # Evaluate GLOBAL model on test dataset every 'global_test_frequency' rounds
-    print(
-        '\n*******************************************')  # use * to mark the Evaluation of GLOBAL model on TEST dataset
-    print('Evaluate global model on global Test dataset')
-    test_acc, test_iou, confmat = test_inference(args, global_model, test_loader)
-    print(confmat)
-    print('\nResults after {} global rounds of training:'.format(start_ep))
-    print("|---- Global Test Accuracy: {:.2f}%".format(test_acc))
-    print("|---- Global Test IoU: {:.2f}%".format(test_iou))
-    print('\nTotal Run Time: {:.2f}s'.format(time.time() - start_time))
-    print('*******************************************')
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,73 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environments
+.env
+.env.*
+.venv/
+venv/
+env/
+ENV/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Datasets and large packaged assets
+/FedSeg*/data/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.bin
+*.npy
+*.npz
+
+# Training logs and outputs
+/FedSeg*/logs/
+/FedSeg*/segmentation/logs/
+/FedSeg*/save/checkpoints/
+/FedSeg*/save/logs/
+/FedSeg*/save/training_curves/
+
+# Model weights and converted checkpoints
+/FedSeg*/segmentation/myseg/backbone_v2.ckpt
+/FedSeg*/segmentation/myseg/backbone_v2.pth
+/FedSeg*/segmentation/myseg/backbone_v2.weights.h5
+/FedSeg*/segmentation/myseg/backbone_v2.meta.json
+*.ckpt
+*.pth
+*.pt
+*.weights.h5
+*.pdparams
+*.pdopt
+*.onnx
+
+# Runtime leftovers
+nohup.out

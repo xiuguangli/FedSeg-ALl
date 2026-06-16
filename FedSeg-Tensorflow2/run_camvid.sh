@@ -47,9 +47,10 @@ DATASET=camvid #cityscapes #ade20k  #camvid
 #NUM_USERS=152
 NUM_CLS=11
 NUM_USERS=22
+GPU_ID="${GPU_ID:-0}"
 
 python -u segmentation/federated_main.py \
---gpu="0" \
+--gpu="${GPU_ID}" \
 --dataset=$DATASET \
 --root_dir=$ROOT_DIR \
 --USE_ERASE_DATA=True \
@@ -94,6 +95,4 @@ python -u segmentation/federated_main.py \
 --global_test_frequency=20 \
 --USE_WANDB=0 \
 --date_now=${date_now} \
-| tee -a "save/logs/log-${date_now}.txt"
-
-
+2>&1 | tee -a "save/logs/log-${date_now}.txt"

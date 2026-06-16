@@ -1,7 +1,7 @@
 # FedSeg
 CVPR 2023 FedSeg: Class-Heterogeneous Federated Learning for Semantic Segmentation
 
-[Pytorch](https://github.com/lightas/FedSeg) | [MindSpore](https://github.com/xiuguangli/FedSeg-mindspore)| [Paddle](https://github.com/18079070189/FedSeg_Paddle.git) | [TensorFlow](https://github.com/xiuguangli/FedSeg-Tensorflow2/)
+[Pytorch](https://github.com/lightas/FedSeg/) | [MindSpore](https://github.com/xiuguangli/FedSeg-mindspore)| [Paddle](https://github.com/18079070189/FedSeg_Paddle.git) | [Tensorflow](https://github.com/xiuguangli/FedSeg-Tensorflow2)
 
 
 ## Datasets for Federated Learning Segmentation
@@ -21,19 +21,8 @@ ADE20k: 链接: https://pan.baidu.com/s/13ypIWZFCa58oZT7cA3KWNA  密码: tps2
 ## Training and Evaluation
 
 Put the downloaded datasets into the folder 'data'
-
-```text
-data
-├── cityscapes
-│   ├── gtFine_trainvaltest
-│   └── leftImg8bit_trainvaltest
-└── VOC
-    ├── images
-    └── labels
 ```
-
-```
-sh run_voc.sh
+sh run_city.sh
 ```
 
 ## Citation

@@ -94,6 +94,5 @@ python -u segmentation/federated_main.py \
 --global_test_frequency=20 \
 --USE_WANDB=0 \
 --date_now=${date_now} \
-| tee -a "save/logs/log-${date_now}.txt"
-
+2>&1 | tee -a "save/logs/log-${date_now}.txt"
 

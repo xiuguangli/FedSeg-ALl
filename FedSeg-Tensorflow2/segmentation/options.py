@@ -10,7 +10,7 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
-def args_parser():
+def args_parser(argv=None, allow_unknown=False):
     parser = argparse.ArgumentParser()
 
     # federated arguments (Notation for the arguments followed from paper)
@@ -28,6 +28,22 @@ def args_parser():
                         help="local batch size: B, default=8, local gpu can only set 1")
     parser.add_argument('--num_workers', type=int, default=1,
                         help='test colab gpu num_workers=1 is faster')
+    parser.add_argument('--eval_bs', type=int, default=8,
+                        help='evaluation batch size for shape-bucketed eval paths')
+    parser.add_argument('--eval_buckets', type=str, default='',
+                        help='comma-separated HxW padded eval buckets, e.g. 384x512,512x512')
+    parser.add_argument('--fast_nhwc', type=str2bool, default=False,
+                        help='use the TensorFlow-native NHWC BiSeNetV2 inference model after loading weights')
+    parser.add_argument('--eval_prebatch', type=str2bool, default=False,
+                        help='pre-bucket and pre-batch eval samples before model inference')
+    parser.add_argument('--eval_tail_pad_batch', type=str2bool, default=False,
+                        help='pad final underfilled eval shape buckets by repeating the last sample before inference')
+    parser.add_argument('--eval_tf_metric', type=str2bool, default=False,
+                        help='compute eval confusion-matrix updates inside TensorFlow instead of copying predictions to NumPy')
+    parser.add_argument('--eval_tfdata_batch', type=str2bool, default=False,
+                        help='use a tf.data shape-batched eval loader to avoid NumPy pad/stack/to_tensor overhead')
+    parser.add_argument('--eval_fast_mode', type=str2bool, default=False,
+                        help='use the fastest VOC eval preset: tf.data shape batches with 384x512 and 512x512 buckets')
     parser.add_argument('--lr', type=float, default=0.01,
                         help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=0.0005,
@@ -104,11 +120,17 @@ def args_parser():
     #                     help='times of normal learning rate used for auxiliary classifier ')
     parser.add_argument('--lr_scheduler', default='poly', choices=['poly', 'step'], help='learning rate scheduler')
     parser.add_argument('--checkpoint', type=str, default='', help='full file name of the checkpoint')
+    parser.add_argument('--checkpoint_dir', type=str, default='save/checkpoints',
+                        help='directory containing checkpoints for eval scripts')
+    parser.add_argument('--checkpoints', nargs='*', default=None,
+                        help='checkpoint filenames or paths; if omitted, eval_voc.py uses --checkpoint when set, otherwise evaluates all supported checkpoints in checkpoint_dir')
     parser.add_argument('--save_frequency', type=int, default=5, help='number of epochs to save checkpoint')
     #parser.add_argument('--test_frequency', type=int, default=5, help='number of epochs to eval global test data')
     parser.add_argument('--local_test_frequency', type=int, default=1, help='number of epochs to eval global model on train data')
     parser.add_argument('--global_test_frequency', type=int, default=5, help='number of epochs to eval global model on test data')
     parser.add_argument('--train_only', action='store_true')
+    parser.add_argument('--eval_only', type=str2bool, default=False,
+                        help='load a checkpoint and run global evaluation without federated training')
     parser.add_argument('--pretrained', action='store_true',
                         help='only available for deeplab_mobilenetv3 and lraspp_mobilenetv3')        
     # parser.add_argument('--activation', default='relu', choices=['relu', 'tanh'],
@@ -120,6 +142,8 @@ def args_parser():
     parser.add_argument('--iid', type=str2bool, default=1,
                         help='Default set to IID. Set to 0 for non-IID.')
     parser.add_argument('--verbose', type=int, default=0, help='verbose')
+    parser.add_argument('--profile_runtime', type=str2bool, default=False,
+                        help='log runtime breakdown for hot-path debugging')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     parser.add_argument('--root', type=str, default='./', help='home directory')
     parser.add_argument('--data', type=str, default='train', choices=['train', 'val'],
@@ -133,5 +157,8 @@ def args_parser():
     #parser.add_argument('--filename', default='', type=str, help='image filename for inference.')
     parser.add_argument('--date_now', default='unknown', type=str, help='for name of my wandb run')
     
-    args = parser.parse_args()
+    if allow_unknown:
+        args, _ = parser.parse_known_args(argv)
+    else:
+        args = parser.parse_args(argv)
     return args

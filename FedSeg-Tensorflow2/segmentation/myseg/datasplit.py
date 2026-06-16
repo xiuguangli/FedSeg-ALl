@@ -1,11 +1,13 @@
 import os
 import time
 import numpy as np
-# import torch
-# from torchvision import datasets, transforms
+import torch
+from torchvision import datasets, transforms
+from logging_utils import logger
 from myseg.dataloader import *
 from myseg.dataloader_camvid import CamVid_Dataset
 from myseg.tv_transform import get_transform
+
 
 def get_dataset_cityscapes(args):
     """
@@ -14,6 +16,7 @@ def get_dataset_cityscapes(args):
     the keys are the user index and the values are the corresponding data for
     each of those users.
     """
+
 
     if args.dataset == 'cityscapes':
 
@@ -27,12 +30,12 @@ def get_dataset_cityscapes(args):
 
         # sample training data among users
         if args.iid: # Sample IID user data from cityscapes
-            user_groups = cityscapes_iid(train_dataset, args.num_users)
+            user_groups = cityscapes_iid(train_dataset, args.num_users, seed=args.seed)
 
             #print('IID user groups: ', user_groups)
         else:  # Sample Non-IID user data from cityscapes
             #user_groups = cityscapes_noniid(args.num_users)
-            user_groups = cityscapes_noniid_extend(args.root_dir, Cityscapes_Dataset.train_folder, args.num_users)
+            user_groups = cityscapes_noniid_extend(args.root_dir, Cityscapes_Dataset.train_folder, args.num_users, seed=args.seed)
 
             #print('Non-IID user groups: ', user_groups)
 
@@ -49,6 +52,7 @@ def get_dataset_camvid(args):
     each of those users.
     """
 
+
     if args.dataset == 'camvid':
 
         if args.data == 'train':
@@ -60,12 +64,13 @@ def get_dataset_camvid(args):
         #test_dataset = torch.utils.data.Subset(test_dataset, range(10))
 
         # sample training data among users
-        user_groups = cityscapes_noniid_extend(args.root_dir, CamVid_Dataset.train_folder, args.num_users)
+        user_groups = cityscapes_noniid_extend(args.root_dir, CamVid_Dataset.train_folder, args.num_users, seed=args.seed)
             #print('Non-IID user groups: ', user_groups)
     else:
         exit('Unrecognized dataset')
 
     return train_dataset, test_dataset, user_groups
+
 
 def get_dataset_ade20k(args):
     """
@@ -74,6 +79,7 @@ def get_dataset_ade20k(args):
     the keys are the user index and the values are the corresponding data for
     each of those users.
     """
+
 
     if args.dataset == 'ade20k' or args.dataset =='voc':
 
@@ -86,23 +92,24 @@ def get_dataset_ade20k(args):
         #test_dataset = torch.utils.data.Subset(test_dataset, range(10))
 
         # sample training data among users
-        user_groups = cityscapes_noniid_extend(args.root_dir, CamVid_Dataset.train_folder, args.num_users)
+        user_groups = cityscapes_noniid_extend(args.root_dir, CamVid_Dataset.train_folder, args.num_users, seed=args.seed)
             #print('Non-IID user groups: ', user_groups)
     else:
         exit('Unrecognized dataset')
 
     return train_dataset, test_dataset, user_groups
 
-def cityscapes_iid(dataset, num_users):
+def cityscapes_iid(dataset, num_users, seed=None):
+    rng = np.random.default_rng(seed)
     num_items = int(len(dataset) / num_users)
     dict_users, all_idxs = {}, [i for i in range(len(dataset))]
     for i in range(num_users):
-        dict_users[i] = set(np.random.choice(all_idxs, num_items,
-                                             replace=False)) # replace=False:不重复选择
-        all_idxs = list(set(all_idxs) - dict_users[i])
+        dict_users[i] = set(rng.choice(all_idxs, num_items, replace=False))
+        all_idxs = sorted(set(all_idxs) - dict_users[i])
     return dict_users
 
-def cityscapes_noniid(num_users):
+
+def cityscapes_noniid(num_users, seed=None):
     """
     Sample non-I.I.D client data from cityscapes
 
@@ -114,6 +121,7 @@ def cityscapes_noniid(num_users):
 
     num_users = 18 * 8 = 144
     """
+    rng = np.random.default_rng(seed)
     timer = time.time()
 
     city_lens = [174, 96, 316, 154, 85, 221, 109, 248, 196, 119, 99, 94, 365, 196, 144, 95, 142, 122]
@@ -128,16 +136,16 @@ def cityscapes_noniid(num_users):
 
         for i in range(num_users_per_city):
             # i + city_idx * num_users_per_city:每个城市的第i个用户的global编号
-            dict_users[i + city_idx * num_users_per_city] = set(np.random.choice(all_idxs, num_items, replace=False)) # replace=False:不重复选择编号
-            all_idxs = list(set(all_idxs) - dict_users[i + city_idx * num_users_per_city])
+            dict_users[i + city_idx * num_users_per_city] = set(rng.choice(all_idxs, num_items, replace=False))
+            all_idxs = sorted(set(all_idxs) - dict_users[i + city_idx * num_users_per_city])
 
         dict_users[(city_idx+1)*num_users_per_city -1] |=  set(all_idxs) # not drop last
 
-    print('Time consumed to get non-iid user indices: {:.2f}s'.format((time.time() - timer)))
+    logger.info("Time consumed to get non-iid user indices: {:.2f}s", time.time() - timer)
 
     return dict_users
 
-def cityscapes_noniid_extend(root_dir, train_folder, num_users):
+def cityscapes_noniid_extend(root_dir, train_folder, num_users, seed=None):
     """
     Sample non-I.I.D client data from cityscapes root_dir and train_folder (or other dataset)
     extend : one function to make non-I.I.D split for 18cities or 19classes
@@ -156,8 +164,9 @@ def cityscapes_noniid_extend(root_dir, train_folder, num_users):
     num_users_per_city = 8
     num_users = 19 * 8 = 152
     """
+    rng = np.random.default_rng(seed)
     timer = time.time()
-    print('\nGetting non-iid user indices for cityscapes: ')
+    logger.info('Getting non-iid user indices')
 
     # city_lens = [174, 96, 316, 154, 85, 221, 109, 248, 196, 119, 99, 94, 365, 196, 144, 95, 142, 122]
     # num_users_per_city = int(num_users / 18)  # 144 / 18 = 8
@@ -165,7 +174,7 @@ def cityscapes_noniid_extend(root_dir, train_folder, num_users):
     city_lens = get_city_num(root_dir, train_folder)
     num_classes = len(city_lens)
     num_users_per_city = int(num_users / num_classes)
-    print("num_users_per_city: {} / {} = {}".format(num_users, num_classes, num_users_per_city))
+    logger.info("num_users_per_city: {} / {} = {}", num_users, num_classes, num_users_per_city)
     assert num_users % num_classes == 0, "num_users % num_classes != 0"
 
     dict_users = {}
@@ -177,30 +186,32 @@ def cityscapes_noniid_extend(root_dir, train_folder, num_users):
 
         for i in range(num_users_per_city):
             # i + city_idx * num_users_per_city:每个城市的第i个用户的global编号
-            dict_users[i + city_idx * num_users_per_city] = set(np.random.choice(all_idxs, num_items, replace=False)) # replace=False:不重复选择编号
-            all_idxs = list(set(all_idxs) - dict_users[i + city_idx * num_users_per_city])
+            dict_users[i + city_idx * num_users_per_city] = set(rng.choice(all_idxs, num_items, replace=False))
+            all_idxs = sorted(set(all_idxs) - dict_users[i + city_idx * num_users_per_city])
 
         dict_users[(city_idx+1)*num_users_per_city -1] |=  set(all_idxs) # not drop last
 
-    print('Time consumed to get non-iid user indices: {:.2f}s\n'.format((time.time() - timer)))
+    logger.info("Time consumed to get non-iid user indices: {:.2f}s", time.time() - timer)
 
     return dict_users
 
+
 def get_city_num(root_dir, train_folder):
     city_names = sorted(os.listdir(os.path.join(root_dir, train_folder))) # sorted:按字母顺序排序
-    print("city_names: ", city_names)
+    logger.debug("city_names: {}", city_names)
     num_classes = len(city_names)
-    print("num_classes: ", num_classes)
+    logger.debug("num_classes: {}", num_classes)
 
     city_lens = []
     for i in range(num_classes):
         city_lens.append(len(os.listdir(os.path.join(root_dir, train_folder, city_names[i]))))
 
     for i in range(num_classes):
-        print(city_names[i], city_lens[i])
+        logger.debug("{} {}", city_names[i], city_lens[i])
 
-    print("city_lens: ", city_lens)
+    logger.debug("city_lens: {}", city_lens)
     return city_lens
+
 
 if __name__ == '__main__':
     root_dir = '/home/fll/leo_test/data/cityscapes'
@@ -221,9 +232,14 @@ if __name__ == '__main__':
     def print_user_groups(user_groups): # non-iid split test
         data_sum = 0
         for i in range(len(user_groups)):  # len(user_groups) = 144 or 152
-            print(i, user_groups[i])
-            print("len(user_groups[{}]): ".format(i), len(user_groups[i]))
+            logger.info("{} {}", i, user_groups[i])
+            logger.info("len(user_groups[{}]): {}", i, len(user_groups[i]))
             data_sum += len(user_groups[i])
-        print("data_sum: ", data_sum)
+        logger.info("data_sum: {}", data_sum)
 
     print_user_groups(user_groups)
+
+
+
+
+

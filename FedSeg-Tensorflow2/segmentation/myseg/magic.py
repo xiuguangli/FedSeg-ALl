@@ -1,6 +1,7 @@
 import cv2
 import tensorflow as tf
 import numpy as np
+import myseg.cv2_transform as cv2_transforms
 
 class MultiEpochsDataLoader:
     """
@@ -85,20 +86,67 @@ def dataset_generator(pytorch_style_dataset):
         pytorch_style_dataset: 您的 CamVid_Dataset 实例。
     """
     for i in range(len(pytorch_style_dataset)):
-        # 调用 __getitem__ 获取一个样本 (这里是 numpy/PIL 对象)
-        image, label = pytorch_style_dataset[i] 
-        
-        # ⚠️ 注意: __getitem__ 已经返回了经过 ToTensor 处理的 NumPy 数组（因为您的代码是用 cv2_transforms.ToTensor 处理的）
-        # 如果 ToTensor 返回的是 NumPy 数组，则直接 yield
-        # 如果返回的是 PyTorch Tensor，需要先转换为 NumPy 数组 (例如：image.numpy(), label.numpy())
-        
-        # 假设您的 ToTensor 返回的是 NumPy 数组
+        image, label = pytorch_style_dataset[i]
         yield image, label
+
+
+def _as_numpy_array(value, dtype):
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value, dtype=dtype)
+
+
+def _compose_numpy_seed(base_seed, call_id, index, offset=0):
+    if base_seed is None:
+        return None
+    seed = (
+        int(base_seed)
+        + 1000003 * int(call_id)
+        + 9176 * int(index)
+        + 97 * int(offset)
+    ) % 2147483647
+    return seed if seed != 0 else 1
+
+
+def _make_indexed_numpy_loader(dataset, output_img_shape, output_lbl_shape, base_seed=None):
+    img_shape = tuple(int(dim) for dim in output_img_shape)
+    lbl_shape = tuple(int(dim) for dim in output_lbl_shape)
+    dataset_len = int(len(dataset))
+
+    def _load_batch(indices, call_id):
+        indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+        call_id = int(np.asarray(call_id).item())
+        images = []
+        labels = []
+        for offset, index in enumerate(indices.tolist()):
+            sample_seed = _compose_numpy_seed(base_seed, call_id, index, offset)
+            if sample_seed is None:
+                image, label = dataset[index]
+            else:
+                with cv2_transforms.numpy_rng_scope(sample_seed):
+                    image, label = dataset[index]
+
+            image = _as_numpy_array(image, np.float32)
+            label = _as_numpy_array(label, np.int64)
+            images.append(np.reshape(image, img_shape))
+            labels.append(np.reshape(label, lbl_shape))
+
+        return np.stack(images, axis=0), np.stack(labels, axis=0)
+
+    return _load_batch, dataset_len
         
 
 def create_tf_dataloader_from_custom_dataset_train(
-    custom_dataset_instance, batch_size, shuffle=True, repeat=True, drop_last=True,
-    output_img_shape=(480, 480, 3), output_lbl_shape=(480, 480)
+    custom_dataset_instance,
+    batch_size,
+    shuffle=True,
+    repeat=True,
+    drop_last=True,
+    output_img_shape=(480, 480, 3),
+    output_lbl_shape=(480, 480),
+    seed=None,
+    num_parallel_calls=None,
+    private_threadpool_size=None,
 ):
     """
     从 CamVid_Dataset 实例创建 tf.data.Dataset。
@@ -112,36 +160,33 @@ def create_tf_dataloader_from_custom_dataset_train(
         output_lbl_shape (tuple): 标签输出形状 (H, W)。
     """
     
-    # 获取生成器
-    generator = lambda: dataset_generator(custom_dataset_instance)
-
-    # 1. 使用 from_generator 创建基础 Dataset
-    # 必须显式指定生成器返回的元素的类型和形状
-    tf_dataset = tf.data.Dataset.from_generator(
-        generator,
-        output_types=(tf.float32, tf.int64), # 根据您 ToTensor 后的类型确定
-        output_shapes=(output_img_shape, output_lbl_shape)
+    load_batch, dataset_len = _make_indexed_numpy_loader(
+        custom_dataset_instance,
+        output_img_shape=output_img_shape,
+        output_lbl_shape=output_lbl_shape,
+        base_seed=seed,
     )
 
-    # 2. 混洗 (Shuffle)
+    index_ds = tf.data.Dataset.range(dataset_len)
     if shuffle:
-        # 使用数据集大小作为 buffer_size
-        tf_dataset = tf_dataset.shuffle(buffer_size=len(custom_dataset_instance))
-
-    # 3. 批量化 (Batching)
-    tf_dataset = tf_dataset.batch(batch_size, drop_remainder=drop_last,num_parallel_calls=tf.data.AUTOTUNE,deterministic=False)
-    
-    # 4. 重复 (Repeat)
+        index_ds = index_ds.shuffle(buffer_size=dataset_len, seed=seed, reshuffle_each_iteration=True)
+    index_ds = index_ds.batch(batch_size, drop_remainder=drop_last)
     if repeat:
-        tf_dataset = tf_dataset.repeat() 
+        index_ds = index_ds.repeat()
+    index_ds = index_ds.enumerate()
 
-    # 5. 预取 (Prefetch)
+    def _map_batch(call_id, indices):
+        image, label = tf.numpy_function(load_batch, [indices, call_id], [tf.float32, tf.int64])
+        image.set_shape((None,) + tuple(output_img_shape))
+        label.set_shape((None,) + tuple(output_lbl_shape))
+        return image, label
+
+    del num_parallel_calls, private_threadpool_size
+    tf_dataset = index_ds.map(_map_batch, num_parallel_calls=tf.data.AUTOTUNE, deterministic=True)
     tf_dataset = tf_dataset.prefetch(tf.data.AUTOTUNE)
-    
     return tf_dataset
 
 import myseg.tv_transform as my_transforms
-import myseg.cv2_transform as cv2_transforms
 from PIL import Image
 def create_tf_dataloader_from_custom_dataset_test111(
     custom_dataset_instance, 
@@ -229,6 +274,10 @@ def create_tf_dataloader_from_custom_dataset_test(
     repeat=False, 
     num_channels=3
 ): 
+    args = custom_dataset_instance.args
+    split = custom_dataset_instance.split
+    images_path, labels_path = custom_dataset_instance.image_dirs, custom_dataset_instance.label_dirs
+
     def _np_transform_remap(image_tensor_np, label_tensor_np):
         # image_tensor_np 和 label_tensor_np 已经是 NumPy 数组
         image = image_tensor_np
@@ -325,14 +374,13 @@ def create_tf_dataloader_from_custom_dataset_test(
         return image, label
         
     
-    images_path, labels_path = custom_dataset_instance.image_dirs, custom_dataset_instance.label_dirs
-    args = custom_dataset_instance.args
-    split = custom_dataset_instance.split
-    
     ds = tf.data.Dataset.from_tensor_slices((images_path, labels_path))
-    ds = ds.shuffle(len(images_path))
+    if shuffle:
+        ds = ds.shuffle(len(images_path))
     ds = ds.map(_tf_map_func, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size)
+    if repeat:
+        ds = ds.repeat()
     ds = ds.prefetch(tf.data.AUTOTUNE)
     return ds 
     
